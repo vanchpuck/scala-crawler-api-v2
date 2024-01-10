@@ -6,7 +6,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.locks.ReentrantLock
 
 object CrawlingQueue {
-  case class Item(url: String, depth: Int, queue: CrawlingQueue) {
+  case class Item(baseUrl: String, url: String, depth: Int, queue: CrawlingQueue) {
 
 //    def url(): String = {
 //      url
@@ -59,16 +59,16 @@ class CrawlingQueue(urls: Iterable[String]) extends Iterator[Item] {
   override def next(): Item = {
     lock.lock()
     try {
-      if (buffer.peek() != null) buffer.poll() else new Item(urlsIterator.next(), 0, this)
+      if (buffer.peek() != null) buffer.poll() else { val n = urlsIterator.next(); Item(n, n, 0, this) }
     }
     finally
       lock.unlock()
   }
 
-  def add(url: String, depth: Int): Unit = {
+  def add(baseUrl :String, url: String, depth: Int): Unit = {
     lock.lock()
     try
-      buffer.add(new Item(url, depth, this))
+      buffer.add(Item(baseUrl, url, depth, this))
     finally
       lock.unlock()
   }

@@ -148,6 +148,7 @@ object SuperNewCrawlerApi {
                                        robotsTxtPolicy: URL => Boolean
                                      )
 
+  // TODO refactor to class (not a case class)
   case class ConfigurationBuilder[Raw, Doc] (
                                               parallelism: Int,
                                               redirect: Raw => Option[String],
@@ -320,8 +321,8 @@ object SuperNewCrawlerApi {
                 res =>
                   val targetRedirect = res.redirectTarget
                     .flatMap(target => Try(URI.create(target).toURL).toOption)
-                    .filter(target => item.depth < conf.redirectPolicy(new URI(item.url).toURL)(target))
-                    .map{target => urls.add(target.toString, item.depth + 1); target}
+                    .filter(target => item.depth < conf.redirectPolicy(new URI(item.baseUrl).toURL)(target))
+                    .map { target => urls.add(item.baseUrl, target.toString, item.depth + 1); target }
                     .map(u => u.toString)
                   println(targetRedirect)
                   Attempt(res.url, res.doc, targetRedirect, Seq.empty)

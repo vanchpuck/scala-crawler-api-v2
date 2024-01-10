@@ -3,6 +3,7 @@ package izolotov.crawler
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import izolotov.DelayedApplier
 import izolotov.crawler.ParallelExtractor._
+//import izolotov.crawler.RobotRules.RobotRulesStub
 import izolotov.crawler.SuperNewCrawlerApi.Configuration
 
 import java.net.{URI, URL}
@@ -23,19 +24,19 @@ object ParallelExtractor {
   // TODO add initial delay parameter
   class TimeoutException(message: String) extends Exception(message: String)
 
-//  class Result[Doc](doc: Doc, redirect: Option[URL], outLinks: Iterable[URL])
+  class NotAllowedException(url: URL) extends Exception
+  class NotAllowedByRobotsTxtException(url: URL) extends NotAllowedException(url)
 
-  trait Attmpt[Doc] {
-    def handleDoc[Out](fn: Doc => Out): Out
-    def handleRedirect(fn: URL => Unit): Unit
-  }
+  class NotAllowedByUserSettingsException(url: URL) extends NotAllowedException(url)
+
+//  class Result[Doc](doc: Doc, redirect: Option[URL], outLinks: Iterable[URL])
 
 
 //  case class Result[Doc](url: String, doc: Try[Doc], redirectTarget: Option[String], outLinks: Iterable[String])
 
   class ParsingException[Raw](raw: Raw) extends Exception
 
-  class FetchingException() extends Exception
+  class FetchingException(cause: Throwable) extends Exception
 
   object Queue {
     def apply(capacity: Int = Int.MaxValue): Queue = new Queue(capacity)
@@ -106,7 +107,7 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
 
   object ExtractionTask {
     def start(url: URL): Attempt[Doc] = {
-      val raw = Try(conf.fetcher(url)).recover{case _ if true => throw new FetchingException}
+      val raw = Try(conf.fetcher(url)).recover{case e if true => throw new FetchingException(e)}
       val redirectTarget: Option[String] = raw.toOption.flatMap(conf.redirect)
       val doc = raw.map(r => conf.parser(url)(r))
       Attempt[Doc](url.toString, doc, redirectTarget, Seq.empty)
@@ -126,26 +127,58 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
     }
   ))
 
-  private val hostMap = collection.mutable.Map[String, (Queue, RobotRules)]()
+  private val hostMap = collection.mutable.Map[String, (Queue, _ <: RobotRules)]()
+
+  private def extractRobotRules(url: URL, queue: Queue): RobotRules = {
+    Try(Await.result(queue.extract(getRobotsTxtURL(url), conf.fetcher.andThen(conf.robotsHandler)), Duration.Inf))
+      // TODO replace println with logging
+      .recover { case exc if true => print(exc); RobotRules.empty() }
+      .get
+  }
 
   def extract(url: String): Future[Attempt[Doc]] = {
+//    val a: String = hostMap("s") = null
+    // TODO Improvement. We have to call robots.txt even if it's ignored in config.
     val spec = Try(URI.create(url).toURL)
       .map { _url => if (!conf.allowancePolicy(_url)) throw new Exception("Not allowed"); _url }
       .map { _url =>
-        val (queue, rules) = hostMap.getOrElseUpdate(
-          _url.getHost,
-          {
-            val queue = new Queue()
-            val rules = Try(Await.result(new Queue().extract(getRobotsTxtURL(_url), conf.fetcher.andThen(conf.robotsHandler)), Duration.Inf))
-              // TODO replace println with logging
-              .recover { case exc if true => print(exc); RobotRules.empty() }
-              .get
-            (queue, rules)
+        hostMap.get(_url.getHost).map { value =>
+          val (queue, rules) = value
+          rules match {
+            case RobotRules.Stub =>
+              if (conf.robotsTxtPolicy(_url)) {
+                val actualRules = extractRobotRules(_url, queue)
+                hostMap(url) = (queue, actualRules)
+                (_url, queue, actualRules)
+              } else
+                (_url, queue, rules)
+            case _ => (_url, queue, rules)
           }
-        )
-        (_url, queue, rules)
+        }.getOrElse {
+          val queue = new Queue(conf.queueLength)
+          val rules = if (conf.robotsTxtPolicy(_url)) extractRobotRules(_url, queue) else RobotRules.Stub
+          (_url, queue, rules)
+        }
       }
-      .map { _spec => val (_url, _, rules) = _spec; if (!rules.allowance(_url)) throw new Exception("Not allowed in robots"); _spec }
+//      spec.
+//        val (queue, rules) = hostMap.getOrElseUpdate(
+//          _url.getHost,
+//          {
+//            val queue = new Queue()
+//            val rules = if (conf.robotsTxtPolicy(_url))
+//              Try(Await.result(new Queue().extract(getRobotsTxtURL(_url), conf.fetcher.andThen(conf.robotsHandler)), Duration.Inf))
+//                // TODO replace println with logging
+//                .recover { case exc if true => print(exc); RobotRules.empty() }
+//                .get
+//            else
+//              RobotRules.stub()
+//            (queue, rules)
+//          }
+//        )
+//        (_url, queue, rules)
+//      }
+//      .map { _spec => val (_url, queue, _) = _spec; if (conf.robotsTxtPolicy(_url)) _spec else (_url, queue, RobotRules.empty()) }
+      .map { _spec => val (_url, _, rules) = _spec; if (!rules.allowance(_url)) throw new NotAllowedByRobotsTxtException(_url); _spec }
     spec match {
       case Success((_url, queue, rules)) => queue.extract(_url, ExtractionTask.start, rules.delay().getOrElse(conf.delay(_url)))
       case Failure(exc) => Future.fromTry(Success(Attempt(url, Failure(exc), None, Seq.empty)))

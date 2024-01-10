@@ -25,10 +25,17 @@ class CrawlCore[Raw, Doc](queue: CrawlingQueue, conf: Configuration[Raw, Doc]) {
             .map{
               res =>
                 val targetRedirect = res.redirectTarget
-                  .flatMap(target => Try(URI.create(target).toURL).toOption)
-                  .filter(target => item.depth < conf.redirectPolicy(new URI(item.url).toURL)(target))
-                  .map{target => queue.add(target.toString, item.depth + 1); target}
-                  .map(u => u.toString)
+//                  .map(target => Try(URI.create(target).toURL))
+//                  .filter(target => item.depth < conf.redirectPolicy(new URI(item.baseUrl).toURL)(target))
+                  .map { target =>
+                    Try(URI.create(target).toURL)
+                      .foreach { t =>
+                        if (item.depth < conf.redirectPolicy(new URI(item.baseUrl).toURL)(t))
+                          queue.add(item.baseUrl, target, item.depth + 1)
+                      }
+                    target
+                  }
+                  .map(u => u)
                 println(targetRedirect)
                 Attempt(res.url, res.doc, targetRedirect, Seq.empty)
             }
