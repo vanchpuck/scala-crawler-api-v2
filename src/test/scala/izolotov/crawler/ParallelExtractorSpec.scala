@@ -1,39 +1,63 @@
 package izolotov.crawler
 
-import izolotov.crawler.CrawlCoreSpec.{DummyRobotRules, Google, Raw, ServerMock, Youtube, YoutubeDisallowByRobots}
-import izolotov.crawler.ParallelExtractor.NotAllowedByRobotsTxtException
+//import izolotov.crawler.CrawlCoreSpec.{DummyRobotRules, Google, Raw, ServerMock, Youtube, YoutubeDisallowByRobots}
+import izolotov.crawler.ParallelExtractor._
 import izolotov.crawler.ParallelExtractorSpec._
 import izolotov.crawler.SuperNewCrawlerApi.{Configuration, ConfigurationBuilder}
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 
-import java.net.URL
-import java.util.concurrent.{CopyOnWriteArrayList, TimeUnit}
+import java.net.{MalformedURLException, URL}
+import java.util.concurrent.{CopyOnWriteArrayList, Executors, LinkedBlockingDeque, ThreadPoolExecutor, TimeUnit}
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext}
+import scala.concurrent.{Await, Awaitable, ExecutionContext, Future}
 import scala.jdk.CollectionConverters._
 import scala.util.{Failure, Success}
 
 object ParallelExtractorSpec {
 
-  case class Raw(url: String, redirect: Option[String])
+  val DefaultProcessingQueueLength = 10
+
+  val DefaultProcessingTime = 3L
+
+  val DefaultUserDefinedDelay = 30L
+  val YoutubeDelay = 20L
+
+  val DefaultUserDefinedTimeout = 10L
+  val GoogleTimeout = 1L
+
+  case class Raw(url: String, redirect: Option[String] = None)
 
   object DummyRobotRules extends RobotRules {
-    override def delay(): Option[Long] = Some(1000L)
+    val DefaultDelay = 50L
+    override def delay(): Option[Long] = Some(DefaultDelay)
 
-    override def allowance(url: URL): Boolean = url.toString != YoutubeDisallowByRobots
+    override def allowance(url: URL): Boolean = url.getPath.replaceFirst("^/", "") != DisallowByRobots
   }
 
   val TimeoutSeconds = 10L
 
+  val DisallowByRobots = "disallowed-by-robots.txt"
+  val DisallowByUser = "disallowed-by-user.txt"
+  val FetchingException = "fetching-exception"
+
   val Google = "http://google.com"
+  val GoogleFailing = s"$Google/$FetchingException"
   val Yahoo = "http://yahoo.com"
-  val Openai = "http://openai.com"
+
+  val OpenaiHost = "openai.com"
+  val Openai = s"http://$OpenaiHost"
+  val OpenaiDisallowByRobots = s"$Openai/$DisallowByRobots"
+  val OpenaiRobots = s"$Openai/robots.txt"
+  val OpenaiTimeout = s"$Openai/timeout"
 
   val YoutubeHost = "youtube.com"
-  val Youtube = s"http://$YoutubeHost.com"
-  val YoutubeRobots = s"http://$YoutubeHost/robots.txt"
-  val YoutubeDisallowByRobots = s"http://$YoutubeHost/disallowed-by-robots.txt"
+  val Youtube = s"http://$YoutubeHost"
+  val YoutubeRobots = s"$Youtube/robots.txt"
+  val YoutubeDisallowByRobots = s"$Youtube/$DisallowByRobots"
+  val YoutubeDisallowByUser = s"$Youtube/$DisallowByUser"
+
+  val Microsoft = "http://microsoft.com"
 
   val RedirectBase = "http://redirect.com"
   val RedirectDepth1 = s"$RedirectBase/1"
@@ -42,6 +66,10 @@ object ParallelExtractorSpec {
 
   val MalformedRedirectBase = "http://malformedredirect.com"
   val MalformedRedirectDepth1 = "http://malformed:redirect.com/1"
+
+  val Apache = "http://apache.org"
+  val Github = "http://github.com"
+  val Gmail = "http://gmail.com"
 
 
   def success(url: String): Attempt[Raw] = Attempt(url, Success(Raw(url, None)))
@@ -52,34 +80,54 @@ object ParallelExtractorSpec {
 
   object ServerMock {
     val Target: Map[String, Raw] = Map(
-      Google -> Raw(Google, None),
-      Yahoo -> Raw(Yahoo, None),
-      Openai -> Raw(Openai, None),
-      Youtube -> Raw(Youtube, None),
-      YoutubeRobots -> Raw(YoutubeRobots, None),
+      Microsoft -> Raw(Microsoft),
+      Google -> Raw(Google),
+      Yahoo -> Raw(Yahoo),
+      Openai -> Raw(Openai),
+      OpenaiRobots -> Raw(OpenaiRobots),
+      OpenaiDisallowByRobots -> Raw(OpenaiDisallowByRobots),
+      Youtube -> Raw(Youtube),
+      YoutubeRobots -> Raw(YoutubeRobots),
+      YoutubeDisallowByRobots -> Raw(YoutubeDisallowByRobots),
       RedirectBase -> Raw(RedirectBase, Some(RedirectDepth1)),
       RedirectDepth1 -> Raw(RedirectDepth1, Some(RedirectDepth2)),
       RedirectDepth2 -> Raw(RedirectDepth2, Some(RedirectDepth3)),
-      RedirectDepth3 -> Raw(RedirectDepth3, None),
-      MalformedRedirectBase -> Raw(MalformedRedirectBase, Some(MalformedRedirectDepth1))
+      RedirectDepth3 -> Raw(RedirectDepth3),
+      MalformedRedirectBase -> Raw(MalformedRedirectBase, Some(MalformedRedirectDepth1)),
+      Apache -> Raw(Apache),
+      Github -> Raw(Github),
+      Gmail -> Raw(Gmail)
     )
   }
 
-  class ServerMock(break: Long = 0L) {
+  class ServerMock(processingTime: Long = 0L) {
     private val _requests = new CopyOnWriteArrayList[Request]()
 
     //    private def requests = _requests
 
     def call(url: URL): Raw = {
+      println("Call: " + url.toString)
       val startTs = System.currentTimeMillis()
-      Thread.sleep(break)
-      val request = Request(url, startTs, System.currentTimeMillis())
-      _requests.add(request)
-      ServerMock.Target(url.toString)
+      try {
+        Thread.sleep(processingTime)
+        if (url.getFile.endsWith(FetchingException)) throw new Exception()
+        val raw = ServerMock.Target(url.toString)
+        raw
+      } finally
+        _requests.add(Request(url, startTs, System.currentTimeMillis()))
     }
 
     def requests: Iterable[Request] = _requests.asScala
   }
+
+  def await[A](fn: Awaitable[A], timeoutSec: Long = TimeoutSeconds): A = {
+    Await.result(fn, Duration.apply(timeoutSec, TimeUnit.SECONDS))
+  }
+
+  def getMinDelay(requests: Seq[Request]): Long = {
+    requests.sliding(2, 1).map(slide => slide(1).startTs - slide.head.endTs).min
+  }
+//  def await[A, B](awaitable: Awaitable[A], timeoutSec: Long): B => Await.result(awaitable, Duration.apply(TimeoutSeconds, TimeUnit.SECONDS))
 }
 
 class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
@@ -89,18 +137,18 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
   var conf: Configuration[Raw, Raw] = _
 
   override def beforeEach() {
-    server = new ServerMock()
+    server = new ServerMock(DefaultProcessingTime)
     //    queue = new CrawlingQueue()
     var builder = new ConfigurationBuilder[Raw, Raw](
-      parallelism = 2,
+      parallelism = 1,
       redirect = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
-      10,
-      allowancePolicy = _ => true,
+      queueLength = DefaultProcessingQueueLength,
+      allowancePolicy = url => !url.getFile.endsWith(DisallowByUser),
       fetcher = server.call,
       parser = req => req,
-      delay = 20L,
-      timeout = 1000000L,
+      delay = DefaultUserDefinedDelay,
+      timeout = DefaultUserDefinedTimeout,
       redirectPolicy = _ => 0,
       robotsTxtPolicy = false
     ).addConf(
@@ -108,7 +156,23 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
       redirectPolicy = _ => 2
     ).addConf(
       predicate = url => url.getHost == YoutubeHost,
+      delay = YoutubeDelay,
       robotsTxtPolicy = true,
+    ).addConf(
+      predicate = url => url.getHost == OpenaiHost,
+      robotsTxtPolicy = false,
+    ).addConf(
+      predicate = url => url.toString == Microsoft,
+      parser = _ => throw new Exception("Dummy exception"),
+    ).addConf(
+      predicate = url => url.toString == Google,
+      timeout = GoogleTimeout,
+    ).addConf(
+      predicate = url => url.toString == Apache,
+      delay = 0L,
+    ).addConf(
+      predicate = url => url.toString == Github,
+      delay = 0L,
     )
     conf = builder.build()
   }
@@ -117,32 +181,119 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
 
   behavior of "ParallelExtractor"
 
-  it should "keep the delay between first call to robots.txt and the subsequent call" in {
-
-  }
-
   it should "not try to extract robots.txt if it's disabled" in {
     val extractor = new ParallelExtractor(conf)
-    extractor.extract(Google)
-    assert(!server.requests.exists(req => req.url.toString == YoutubeRobots))
+    await(extractor.extract(Openai))
+    assert(!server.requests.exists(req => req.url.toString == OpenaiRobots))
   }
 
   it should "try to extract robots.txt if it's enabled" in {
-    val extractor = new ParallelExtractor(conf)
-    extractor.extract(Youtube)
+    await(new ParallelExtractor(conf).extract(Youtube))
     assert(server.requests.exists(req => req.url.toString == YoutubeRobots))
+    server.requests
   }
 
   it should "follow the robots.txt rules if it's enabled" in {
     val extractor = new ParallelExtractor(conf)
-    assert(Raw(Youtube) == Await.result(extractor.extract(Youtube), Duration.apply(TimeoutSeconds, TimeUnit.SECONDS)).doc.get)
+    assert(Raw(Youtube) == await(extractor.extract(Youtube)).doc.get)
     assertThrows[NotAllowedByRobotsTxtException](
-      Await.result(extractor.extract(YoutubeDisallowByRobots), Duration.apply(TimeoutSeconds, TimeUnit.SECONDS)).doc.get
+      await(extractor.extract(YoutubeDisallowByRobots)).doc.get
     )
   }
 
   it should "not follow the robots.txt rules if it's disabled" in {
+    assert(Raw(OpenaiDisallowByRobots) == await(new ParallelExtractor(conf).extract(OpenaiDisallowByRobots)).doc.get)
+  }
 
+  it should "keep the delay between first call to robots.txt and the subsequent call" in {
+    await(new ParallelExtractor(conf).extract(Youtube))
+    assert(getMinDelay(server.requests.toSeq) >= DummyRobotRules.DefaultDelay)
+  }
+
+  it should "return an attempt with a failure for a URL that can't be extracted" in {
+    val extractor = new ParallelExtractor(conf)
+    assertThrows[IllegalArgumentException](await(extractor.extract("no-protocol-url")).doc.get)
+    assertThrows[MalformedURLException](await(extractor.extract("http://malformed:url")).doc.get)
+    assertThrows[ParallelExtractor.FetchingException](await(extractor.extract(GoogleFailing)).doc.get)
+  }
+
+  it should "return an attempt with a raw response for a URL that can't be parsed" in {
+    val extractor = new ParallelExtractor(conf)
+    await(extractor.extract(Microsoft)).doc match {
+      case Failure(exc) => assert(exc.asInstanceOf[ParsingException[Raw]].raw == Raw(Microsoft))
+    }
+  }
+
+  it should "return an attempt with a raw response for a URL with redirect" in {
+    val extractor = new ParallelExtractor(conf)
+    await(extractor.extract(RedirectBase)).doc match {
+      case Failure(exc) => assert(exc.asInstanceOf[RedirectException[Raw]].raw == Raw(RedirectBase, Some(RedirectDepth1)))
+    }
+  }
+
+  it should "keep the delay between calls to the same hosts URLs" in {
+    val extractor = new ParallelExtractor(conf)
+    await(Future.sequence(Seq(
+      extractor.extract(Openai),
+      extractor.extract(Openai),
+      extractor.extract(Openai),
+      extractor.extract(Youtube),
+      extractor.extract(Youtube),
+      extractor.extract(Youtube)
+    )))
+    val grouped = server.requests.toSeq.groupBy(req => req.url.getHost)
+    getMinDelay(grouped(YoutubeHost)) >= YoutubeDelay
+    getMinDelay(grouped(OpenaiHost)) >= DefaultUserDefinedDelay
+  }
+
+  it should "fail with timeout if extraction takes too long" in {
+    val extractor = new ParallelExtractor(conf)
+    val actual = await(extractor.extract(Google)).doc.failed.get.getClass
+    val expected = classOf[ParallelExtractor.TimeoutException]
+    assert(expected == actual)
+  }
+
+  it should "respect a user-defined allowance policy" in {
+    val resp = await(new ParallelExtractor(conf).extract(YoutubeDisallowByUser))
+    assertThrows[NotAllowedByUserException](
+      await(new ParallelExtractor(conf).extract(YoutubeDisallowByUser)).doc.get
+    )
+    assert(server.requests.isEmpty)
+  }
+
+  it should "Extract a specified max number of URLs in parallel" in {
+    val extractor = new ParallelExtractor(conf)
+    await(Future.sequence(Seq(
+      extractor.extract(Apache),
+      extractor.extract(Github),
+      extractor.extract(Gmail)
+    )))
+    val requests = server.requests.toSeq.sortBy(req => req.startTs)
+    println(requests)
+    assert(requests(2).startTs >= Math.min(requests.head.endTs, requests(1).endTs))
+  }
+
+  it should "limit the number of pending URLs according to the queueLength parameter value" in {
+    val processingTime = 10L
+    val server = new ServerMock(processingTime)
+    val builder = new ConfigurationBuilder[Raw, Raw](
+      parallelism = 2,
+      redirect = raw => raw.redirect,
+      robotsHandler = _ => DummyRobotRules,
+      queueLength = 1,
+      fetcher = server.call,
+      parser = req => req,
+      robotsTxtPolicy = false
+    )
+    val conf = builder.build()
+    val extractor = new ParallelExtractor(conf)
+    await(Future.sequence(Seq(
+      extractor.extract(Apache),
+      extractor.extract(Github),
+      extractor.extract(Gmail)
+    )))
+    val requests = server.requests.toSeq.sortBy(req => req.startTs)
+    assert(requests(2).startTs >= Math.max(requests.head.endTs, requests(1).endTs))
   }
 
 }

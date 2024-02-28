@@ -13,20 +13,17 @@ object CrawlCore {
 }
 
 class CrawlCore[Raw, Doc](queue: CrawlingQueue, conf: Configuration[Raw, Doc]) {
-  def foreach[Out](fn: Attempt[Doc] => Out): Unit = {
+  def foreach[Out](fn: Attempt[Doc] => Out)(implicit executionContext: ExecutionContext): Unit = {
     // FIXME create context instead of using the global one
-    implicit val ec = ExecutionContext.global
     val extractor = new ParallelExtractor[Raw, Doc](conf)
     val futures = queue
-      .map{
+      .map {
         item =>
           item.markAsInProgress()
           val future = extractor.extract(item.url)
-            .map{
+            .map {
               res =>
                 val targetRedirect = res.redirectTarget
-//                  .map(target => Try(URI.create(target).toURL))
-//                  .filter(target => item.depth < conf.redirectPolicy(new URI(item.baseUrl).toURL)(target))
                   .map { target =>
                     Try(URI.create(target).toURL)
                       .foreach { t =>
@@ -35,8 +32,6 @@ class CrawlCore[Raw, Doc](queue: CrawlingQueue, conf: Configuration[Raw, Doc]) {
                       }
                     target
                   }
-                  .map(u => u)
-                println(targetRedirect)
                 Attempt(res.url, res.doc, targetRedirect, Seq.empty)
             }
           future.onComplete {

@@ -1,5 +1,6 @@
 package izolotov.crawler
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder
 import izolotov.CrawlingQueue
 import izolotov.crawler.CrawlCoreSpec._
 import izolotov.crawler.SuperNewCrawlerApi.{Configuration, ConfigurationBuilder}
@@ -7,7 +8,8 @@ import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 
 import java.net.{MalformedURLException, URL}
-import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.{CopyOnWriteArrayList, Executors}
+import scala.concurrent.{ExecutionContext, ExecutionContextExecutorService}
 import scala.jdk.CollectionConverters._
 import scala.util.Success
 
@@ -27,8 +29,8 @@ object CrawlCoreSpec {
 
   val Youtube = "http://youtube.com"
   val YoutubeRobots = "http://youtube.com/robots.txt"
-//  val DisallowByRobots = "disallowed-by-robots.txt"
-  val YoutubeDisallowByRobots = s"http://youtube.com/disallowed-by-robots.txt"
+  val DisallowByRobots = "disallowed-by-robots.txt"
+  val YoutubeDisallowByRobots = s"http://youtube.com/$DisallowByRobots"
 
   val RedirectBase = "http://redirect.com"
   val RedirectDepth1 = s"$RedirectBase/1"
@@ -78,6 +80,10 @@ object CrawlCoreSpec {
 
 class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
 
+  implicit val ec: ExecutionContextExecutorService = ExecutionContext.fromExecutorService(
+    Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().setDaemon(true).build)
+  )
+
   var server: ServerMock = _
   var conf: Configuration[Raw, Raw] = _
 
@@ -88,7 +94,7 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
       parallelism = 2,
       redirect = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
-      10,
+      queueLength = 3,
       allowancePolicy = url => !url.toString.contains("disallowed"),
       fetcher = server.call,
       parser = req => req,
@@ -102,6 +108,9 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
     ).addConf(
       predicate = url => url.toString == Youtube,
       robotsTxtPolicy = true
+    ).addConf(
+      predicate = url => url.toString == Google,
+      delay = 1000L
     )
     conf = builder.build()
   }
@@ -131,21 +140,19 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
   it should "try to extract redirect targets up to specific depth" in {
     val queue = new CrawlingQueue(Seq(RedirectBase))
     val core = CrawlCore(queue, conf)
-    val expected = Seq(redirect(RedirectBase, RedirectDepth1), redirect(RedirectDepth1, RedirectDepth2), redirect(RedirectDepth2, RedirectDepth3))
-    val actual = new CopyOnWriteArrayList[Attempt[Raw]]()
-    core.foreach(att => actual.add(att))
-    assert(expected.toSet == actual.asScala.toSet)
+    val expected = Seq((RedirectBase, Some(RedirectDepth1)), (RedirectDepth1, Some(RedirectDepth2)), (RedirectDepth2, Some(RedirectDepth3)))
+    val actual = new CopyOnWriteArrayList[(String, Option[String])]()
+    core.foreach(att => actual.add((att.url, att.redirectTarget)))
+    assert(actual.asScala.toSet == expected.toSet)
   }
 
   it should "not try to extract redirect targets if the target is invalid" in {
     val queue = new CrawlingQueue(Seq(MalformedRedirectBase))
     val core = CrawlCore(queue, conf)
-    val expected = Seq(redirect(MalformedRedirectBase, MalformedRedirectDepth1))
-    val actual = new CopyOnWriteArrayList[Attempt[Raw]]()
-    core.foreach(att => actual.add(att))
-    assert(expected.toSet == actual.asScala.toSet)
+    val expected = Seq((MalformedRedirectBase, Some(MalformedRedirectDepth1)))
+    val actual = new CopyOnWriteArrayList[(String, Option[String])]()
+    core.foreach(att => actual.add((att.url, att.redirectTarget)))
+    assert(actual.asScala.toSet == expected.toSet)
   }
-
-
 
 }

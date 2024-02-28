@@ -1,6 +1,7 @@
 package izolotov.crawler
 
 import com.google.common.collect.Lists
+import com.google.common.util.concurrent.ThreadFactoryBuilder
 import crawlercommons.robots.{BaseRobotRules, SimpleRobotRules, SimpleRobotRulesParser}
 import izolotov.CrawlingQueue
 import izolotov.crawler.ParallelExtractor.Queue
@@ -9,23 +10,26 @@ import org.jsoup.nodes.Document
 import java.net.URI
 import java.net.URL
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+import java.util.concurrent.Executors
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutorService, Future}
 import scala.util.{Success, Try}
 //import izolotov.crawler.NewCrawlerApi.Configuration
 
 object SuperNewCrawlerApi {
 
-  class ExtractionProcess[Raw, Doc](conf: Configuration[Raw, Doc]) {
+  private val DaemonThreadFactory = new ThreadFactoryBuilder().setDaemon(true).build
 
-
-    class RobotsRulesExtractor(fetcher: URL => Raw, robotsTxtParser: Raw => RobotRules) {
-      implicit val executionContext = ExecutionContext.global
-      def extract(url: URL): RobotRules = {
-        Await.result(new Queue().extract(url, fetcher.andThen(conf.robotsHandler)), Duration.Inf)
-      }
-    }
-  }
+//  class ExtractionProcess[Raw, Doc](conf: Configuration[Raw, Doc]) {
+//
+//
+//    class RobotsRulesExtractor(fetcher: URL => Raw, robotsTxtParser: Raw => RobotRules) {
+//      implicit val executionContext = ExecutionContext.global
+//      def extract(url: URL): RobotRules = {
+//        Await.result(new Queue().extract(url, fetcher.andThen(conf.robotsHandler)), Duration.Inf)
+//      }
+//    }
+//  }
 
   object Spec {
     def apply[Raw, Doc](url: URL, conf: Configuration[Raw, Doc], robotsRules: RobotRules): Spec[Raw, Doc] = {
@@ -43,68 +47,7 @@ object SuperNewCrawlerApi {
     }
   }
 
-  class HostCache(getRules: URL => RobotRules, getQueue: () => Queue) {
-    val hostMap = collection.mutable.Map[String, (Queue, RobotRules)]()
-    def getOrElseUpdate(url: URL): (Queue, RobotRules) = {
-      hostMap.getOrElseUpdate(
-        url.getHost,
-        (getQueue(), getRules(new URL(s"${url.getProtocol}://${url.getHost}/robots.txt")))
-      )
-    }
-    def getQueue(url: URL): Option[Queue] = {
-      hostMap.get(url.getHost).map(value => value._1)
-    }
-    def getRobotsRules(url: URL): Option[RobotRules] = {
-      hostMap.get(url.getHost).map(value => value._2)
-    }
-    def update(url: URL): HostCache = {
-      hostMap(url.getHost) = (getQueue(), getRules(url))
-      this
-    }
-  }
 
-  class ExtractionManager[Raw, Doc](conf: Configuration[Raw, Doc]) {
-    val extractRulesFn: URL => RobotRules = conf.fetcher.andThen(conf.robotsHandler)
-    val createQueueFn: () => Queue = Queue.apply
-
-    val hostCache = new HostCache(extractRulesFn, createQueueFn)
-
-    implicit val ec = ExecutionContext.global
-
-//    def extract(url: URL): Att[Raw, Doc] = {
-//      val (queue, robotsRules) = hostCache.getOrElseUpdate(url)
-//      Att(queue, Spec(url, conf, robotsRules))
-//    }
-//    def extract(item: Item): Future[Doc] = {
-//
-//    }
-    def extract(url: URL): Future[Doc] = {
-      val (queue, robotsRules) = hostCache.getOrElseUpdate(url)
-      val spec = Spec(url, conf, robotsRules)
-      queue.extract(url, spec.extractionFn(), spec.delay())
-    }
-  }
-
-//  class HostKit[Raw](redirector: Raw => Option[URL], queueLength: Int)(implicit executionContext: ExecutionContext) {
-//    val hostMap = collection.mutable.Map[String, (Queue, RobotsRules)]()
-//    def get(url: URL): (Queue, RobotsRules) = {
-//      hostMap.getOrElseUpdate(
-//        url.getHost(),
-//        {
-//          val queue = new Queue(queueLength)
-//          val rules = Await.result(new Queue().extract(getRobotsTxtURL(url), conf.fetcher.andThen(conf.robotsHandler)), Duration.Inf)
-//          (queue, rules)
-//        }
-//        //          (new Queue, Await.result(new Queue().extract(getRobotsTxtURL(url), conf.fetcher.andThen(conf.robotsHandler)), Duration.Inf))
-//      )
-//    }
-//  }
-
-  class Context() {
-    private var _queue: CrawlingQueue = null
-    def queue = _queue
-    def queue (urls: CrawlingQueue) = _queue = urls
-  }
 
   object NewCrawler {
     def read(urls: CrawlingQueue): ExtractionBuilder = {
@@ -120,6 +63,10 @@ object SuperNewCrawlerApi {
 
   val DefaultDelay = 0L
   val DefaultRedirectDepth = 1
+  val DefaultTimeout = 10000L
+  val DoNotFollowRedirectPolicy: URL => Int = _ => 0
+  val RespectRobotsTxtPolicy = true
+  val AllowAllPolicy: URL => Boolean = _ => true
 
   case class GlobalConf[Raw](
                               parallelism: Int,
@@ -148,20 +95,21 @@ object SuperNewCrawlerApi {
                                        robotsTxtPolicy: URL => Boolean
                                      )
 
+
+  
   // TODO refactor to class (not a case class)
   case class ConfigurationBuilder[Raw, Doc] (
                                               parallelism: Int,
                                               redirect: Raw => Option[String],
-                                              //                                              redirectHandler: URL => Unit,
                                               robotsHandler: Raw => RobotRules,
-                                              queueLength: Int,
-                                              allowancePolicy: URL => Boolean,
                                               fetcher: URL => Raw,
                                               parser: Raw => Doc,
-                                              delay: Long,
-                                              timeout: Long,
-                                              redirectPolicy: URL => Int,
-                                              robotsTxtPolicy: Boolean
+                                              allowancePolicy: URL => Boolean = AllowAllPolicy,
+                                              queueLength: Int = Int.MaxValue,
+                                              delay: Long = DefaultDelay,
+                                              timeout: Long = DefaultTimeout,
+                                              redirectPolicy: URL => Int = DoNotFollowRedirectPolicy,
+                                              robotsTxtPolicy: Boolean = RespectRobotsTxtPolicy
                                             ) {
     private var getFetcher: PartialFunction[URL, Raw] = {case url if true => this.fetcher(url)}
     private var getParser: PartialFunction[URL, Raw => Doc] = {case _ if true => this.parser}
@@ -191,6 +139,7 @@ object SuperNewCrawlerApi {
                   fetcher: URL => Raw = this.fetcher,
                   parser: Raw => Doc = this.parser,
                   delay: Long = this.delay,
+                  timeout: Long = this.timeout,
                   redirectPolicy: URL => Int = this.redirectPolicy,
                   robotsTxtPolicy: Boolean = this.robotsTxtPolicy
                 ): ConfigurationBuilder[Raw, Doc] = {
@@ -272,10 +221,10 @@ object SuperNewCrawlerApi {
         parallelism,
         redirect,
         robots,
-        queueLength,
-        allowancePolicy,
         fetcher,
         parser,
+        allowancePolicy,
+        queueLength,
         delay,
         timeout,
         redirectPolicy,
@@ -292,51 +241,23 @@ object SuperNewCrawlerApi {
                                           builder: ConfigurationBuilder[Raw, Doc]
                                         ) {
     // FIXME get rid of global
-    implicit val ec = ExecutionContext.global
+//    implicit val ec = ExecutionContext.global
+    implicit val ec: ExecutionContextExecutorService = ExecutionContext.fromExecutorService(
+      Executors.newSingleThreadExecutor(DaemonThreadFactory)
+    )
+//    implicit val ec: ExecutionContext = ExecutionContext.global
 
     def foreach[Err](onSuccess: Doc => Unit, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
-//      foreachRaw(res => res.doc)(doc => doc.map(onSuccess).recover{case e if true => onErr(e)})
-      foreachRaw1(res => res.doc)(doc => doc.map(onSuccess).recover{case e if true => onErr(e)})
+      foreachRaw(res => res.doc)(doc => doc.map(onSuccess).recover{case e if true => onErr(e)})
     }
 
     def foreach(fn: Attempt[Doc] => Unit): Unit = {
-//      foreachRaw(res => res)(fn)
-      foreachRaw1(res => res)(fn)
-    }
-
-    private def foreachRaw1[A](get: Attempt[Doc] => A)(fn: A => Unit): Unit = {
-      val core = new CrawlCore[Raw, Doc](urls, builder.build())
-      core.foreach(get.andThen(fn))
+      foreachRaw(res => res)(fn)
     }
 
     private def foreachRaw[A](get: Attempt[Doc] => A)(fn: A => Unit): Unit = {
-      val conf: Configuration[Raw, Doc] = builder.build()
-      val extractor = new ParallelExtractor[Raw, Doc](conf)
-      val futures = urls
-        .map{
-          item =>
-            item.markAsInProgress()
-            val future = extractor.extract(item.url)
-              .map{
-                res =>
-                  val targetRedirect = res.redirectTarget
-                    .flatMap(target => Try(URI.create(target).toURL).toOption)
-                    .filter(target => item.depth < conf.redirectPolicy(new URI(item.baseUrl).toURL)(target))
-                    .map { target => urls.add(item.baseUrl, target.toString, item.depth + 1); target }
-                    .map(u => u.toString)
-                  println(targetRedirect)
-                  Attempt(res.url, res.doc, targetRedirect, Seq.empty)
-              }
-            future.onComplete {
-              case Success(result) =>
-                try
-                  fn(get(result))
-                finally
-                  item.markAsProcessed()
-            }
-            future
-        }
-      Await.result(Future.sequence(futures), Duration.Inf)
+      val core = new CrawlCore[Raw, Doc](urls, builder.build())
+      core.foreach(get.andThen(fn))
     }
 
     def when(predicate: URL => Boolean): BranchConfigurationBuilder[Raw, Doc] = {
@@ -349,10 +270,11 @@ object SuperNewCrawlerApi {
              fetcher: URL => Raw = conf.fetcher,
              parser: Raw => Doc = conf.parser,
              delay: Long = conf.delay,
+             timeout: Long = conf.timeout,
              redirectPolicy: URL => Int = conf.redirectPolicy,
              robotsTxtPolicy: Boolean = conf.robotsTxtPolicy
            ): BranchPredicateBuilder[Raw, Doc] = {
-      conf.addConf(predicate, fetcher, parser, delay, redirectPolicy, robotsTxtPolicy)
+      conf.addConf(predicate, fetcher, parser, delay, timeout, redirectPolicy, robotsTxtPolicy)
       new BranchPredicateBuilder[Raw, Doc](urls, conf)
     }
   }
@@ -373,15 +295,6 @@ object SuperNewCrawlerApi {
     }
   }
   class DefaultRobotRules(rules: SimpleRobotRules) extends RobotRules {
-//  class DefaultRobotsRules(url: URL, content: Array[Byte], contentType: String, robotName: String) extends RobotsRules {
-
-//    val rules = new SimpleRobotRulesParser().parseContent(
-//      url.toString,
-//      content,
-//      contentType,
-//      Lists.newArrayList(robotName)
-//    )
-
     override def delay(): Option[Long] = {
       if (rules.getCrawlDelay == BaseRobotRules.UNSET_CRAWL_DELAY) None else Some(rules.getCrawlDelay)
     }
@@ -460,7 +373,7 @@ object SuperNewCrawlerApi {
         redirectPolicy = no(),
         allowancePolicy = Allow.url("http://example.com")
       )
-      .when(url("http://example.com")).set(delay = 2000L, redirectPolicy = Redirect.url("http://redirect1.com"))
+      .when(url("http://example.com")).set(delay = 500L, redirectPolicy = Redirect.url("http://redirect.com"))
 //      .when(url("https://www.tradeinn.com/trekkinn/ru/petzl-nomic-%D0%9B%D0%B5%D0%B4%D0%BE%D1%80%D1%83%D0%B1/137053842/p")).set(parser = trekkinnParser)
 //      .when(url("https://www.densurka.ru")).set(delay = 3000L, robotsTxtPolicy = true)
       .foreach(println, println)//err => err.printStackTrace())
