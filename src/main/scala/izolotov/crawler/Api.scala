@@ -4,50 +4,17 @@ import com.google.common.collect.Lists
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import crawlercommons.robots.{BaseRobotRules, SimpleRobotRules, SimpleRobotRulesParser}
 import izolotov.CrawlingQueue
-import izolotov.crawler.ParallelExtractor.Queue
 import org.jsoup.nodes.Document
 
-import java.net.URI
 import java.net.URL
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.util.concurrent.Executors
-import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutorService, Future}
-import scala.util.{Success, Try}
-//import izolotov.crawler.NewCrawlerApi.Configuration
+import scala.concurrent.{ExecutionContext, ExecutionContextExecutorService}
+import scala.util.{Failure, Success, Try}
 
 object SuperNewCrawlerApi {
 
   private val DaemonThreadFactory = new ThreadFactoryBuilder().setDaemon(true).build
-
-//  class ExtractionProcess[Raw, Doc](conf: Configuration[Raw, Doc]) {
-//
-//
-//    class RobotsRulesExtractor(fetcher: URL => Raw, robotsTxtParser: Raw => RobotRules) {
-//      implicit val executionContext = ExecutionContext.global
-//      def extract(url: URL): RobotRules = {
-//        Await.result(new Queue().extract(url, fetcher.andThen(conf.robotsHandler)), Duration.Inf)
-//      }
-//    }
-//  }
-
-  object Spec {
-    def apply[Raw, Doc](url: URL, conf: Configuration[Raw, Doc], robotsRules: RobotRules): Spec[Raw, Doc] = {
-      new Spec[Raw, Doc](url, conf, robotsRules)
-    }
-  }
-
-  class Spec[Raw, Doc](url: URL, conf: Configuration[Raw, Doc], robotsRules: RobotRules) {
-    def url(): URL = url
-    def delay(): Long = if (conf.robotsTxtPolicy(url)) robotsRules.delay.getOrElse(conf.delay(url)) else conf.delay(url)
-    def extractionFn(): URL => Doc = {
-      conf.fetcher
-        .andThen{raw => conf.redirect(raw); raw}
-        .andThen(conf.parser(url))
-    }
-  }
-
-
 
   object NewCrawler {
     def read(urls: CrawlingQueue): ExtractionBuilder = {
@@ -55,11 +22,6 @@ object SuperNewCrawlerApi {
     }
 
   }
-
-  //  val DummyParser = Raw => Doc =
-  //  object ExtractionBuilder {
-  //
-  //  }
 
   val DefaultDelay = 0L
   val DefaultRedirectDepth = 1
