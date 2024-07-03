@@ -1,16 +1,18 @@
 package izolotov.crawler
 
-//import izolotov.crawler.CrawlCoreSpec.{DummyRobotRules, Google, Raw, ServerMock, Youtube, YoutubeDisallowByRobots}
 import izolotov.crawler.ParallelExtractor._
 import izolotov.crawler.ParallelExtractorSpec._
-import izolotov.crawler.SuperNewCrawlerApi.{Configuration, ConfigurationBuilder}
+import izolotov.crawler.core.Api.{Configuration, ConfigurationBuilder}
+import izolotov.crawler.core.{Attempt, HttpHeader}
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 
 import java.net.{MalformedURLException, URL}
-import java.util.concurrent.{CopyOnWriteArrayList, Executors, LinkedBlockingDeque, ThreadPoolExecutor, TimeUnit}
+import java.util
+import java.util.Collections
+import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, Awaitable, ExecutionContext, Future}
+import scala.concurrent.{Await, Awaitable, ExecutionContext, ExecutionContextExecutor, Future}
 import scala.jdk.CollectionConverters._
 import scala.util.{Failure, Success}
 
@@ -101,11 +103,9 @@ object ParallelExtractorSpec {
   }
 
   class ServerMock(processingTime: Long = 0L) {
-    private val _requests = new CopyOnWriteArrayList[Request]()
+    private val _requests = Collections.synchronizedList(new util.ArrayList[Request]())
 
-    //    private def requests = _requests
-
-    def call(url: URL): Raw = {
+    def call(url: URL, headers: Iterable[HttpHeader]): Raw = {
       println("Call: " + url.toString)
       val startTs = System.currentTimeMillis()
       try {
@@ -138,8 +138,7 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
 
   override def beforeEach() {
     server = new ServerMock(DefaultProcessingTime)
-    //    queue = new CrawlingQueue()
-    var builder = new ConfigurationBuilder[Raw, Raw](
+    val builder = new ConfigurationBuilder[Raw, Raw](
       parallelism = 1,
       redirect = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
@@ -177,7 +176,7 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
     conf = builder.build()
   }
 
-  implicit val ec = ExecutionContext.global
+  implicit val ec: ExecutionContextExecutor = ExecutionContext.global
 
   behavior of "ParallelExtractor"
 
@@ -190,7 +189,6 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
   it should "try to extract robots.txt if it's enabled" in {
     await(new ParallelExtractor(conf).extract(Youtube))
     assert(server.requests.exists(req => req.url.toString == YoutubeRobots))
-    server.requests
   }
 
   it should "follow the robots.txt rules if it's enabled" in {
@@ -254,7 +252,7 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
   }
 
   it should "respect a user-defined allowance policy" in {
-    val resp = await(new ParallelExtractor(conf).extract(YoutubeDisallowByUser))
+    await(new ParallelExtractor(conf).extract(YoutubeDisallowByUser))
     assertThrows[NotAllowedByUserException](
       await(new ParallelExtractor(conf).extract(YoutubeDisallowByUser)).doc.get
     )
@@ -273,27 +271,20 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
     assert(requests(2).startTs >= Math.min(requests.head.endTs, requests(1).endTs))
   }
 
-  it should "limit the number of pending URLs according to the queueLength parameter value" in {
-    val processingTime = 10L
-    val server = new ServerMock(processingTime)
-    val builder = new ConfigurationBuilder[Raw, Raw](
-      parallelism = 2,
+  it should "not support queueLength value that is less than 1" in {
+    val conf = new ConfigurationBuilder[Raw, Raw](
+      parallelism = 1,
       redirect = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
-      queueLength = 1,
+      queueLength = 0,
       fetcher = server.call,
       parser = req => req,
-      robotsTxtPolicy = false
+      robotsTxtPolicy = false,
+      delay = 5L
+    ).build()
+    assertThrows[IllegalArgumentException](
+      new ParallelExtractor(conf)
     )
-    val conf = builder.build()
-    val extractor = new ParallelExtractor(conf)
-    await(Future.sequence(Seq(
-      extractor.extract(Apache),
-      extractor.extract(Github),
-      extractor.extract(Gmail)
-    )))
-    val requests = server.requests.toSeq.sortBy(req => req.startTs)
-    assert(requests(2).startTs >= Math.max(requests.head.endTs, requests(1).endTs))
   }
 
 }

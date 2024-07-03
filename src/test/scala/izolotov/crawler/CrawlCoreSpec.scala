@@ -1,9 +1,10 @@
 package izolotov.crawler
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import izolotov.CrawlingQueue
+import izolotov.BoundedCrawlQueue
 import izolotov.crawler.CrawlCoreSpec._
-import izolotov.crawler.SuperNewCrawlerApi.{Configuration, ConfigurationBuilder}
+import izolotov.crawler.core.Api.{Configuration, ConfigurationBuilder}
+import izolotov.crawler.core.{Attempt, HttpHeader}
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 
@@ -64,9 +65,7 @@ object CrawlCoreSpec {
   class ServerMock(break: Long = 0L) {
     private val _requests = new CopyOnWriteArrayList[Request]()
 
-//    private def requests = _requests
-
-    def call(url: URL): Raw = {
+    def call(url: URL, headers: Iterable[HttpHeader]): Raw = {
       val startTs = System.currentTimeMillis()
       Thread.sleep(break)
       val request = Request(url, startTs, System.currentTimeMillis())
@@ -89,8 +88,7 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
 
   override def beforeEach() {
     server = new ServerMock()
-//    queue = new CrawlingQueue()
-    var builder = new ConfigurationBuilder[Raw, Raw](
+    val builder = new ConfigurationBuilder[Raw, Raw](
       parallelism = 2,
       redirect = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
@@ -115,12 +113,8 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
     conf = builder.build()
   }
 
-//  override def afterEach() {
-//    queue.close()
-//  }
-
   it should "create attempt for a invalid URL" in {
-    val queue = new CrawlingQueue(Seq("no-protocol-url", "http://malformed:url"))
+    val queue = BoundedCrawlQueue(Seq("no-protocol-url", "http://malformed:url").iterator)
     val core = CrawlCore(queue, conf)
     val expected = Seq(classOf[IllegalArgumentException], classOf[MalformedURLException])
     val actual = new CopyOnWriteArrayList[Class[_ <: Throwable]]()
@@ -129,7 +123,7 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
   }
 
   it should "try to extract all URLs from the queue" in {
-    val queue = new CrawlingQueue(Seq(Google, Yahoo, Openai))
+    val queue = BoundedCrawlQueue(Seq(Google, Yahoo, Openai).iterator)
     val core = CrawlCore(queue, conf)
     val expected = Seq(success(Google), success(Yahoo), success(Openai))
     val actual = new CopyOnWriteArrayList[Attempt[Raw]]()
@@ -138,7 +132,7 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
   }
 
   it should "try to extract redirect targets up to specific depth" in {
-    val queue = new CrawlingQueue(Seq(RedirectBase))
+    val queue = BoundedCrawlQueue(Seq(RedirectBase).iterator)
     val core = CrawlCore(queue, conf)
     val expected = Seq((RedirectBase, Some(RedirectDepth1)), (RedirectDepth1, Some(RedirectDepth2)), (RedirectDepth2, Some(RedirectDepth3)))
     val actual = new CopyOnWriteArrayList[(String, Option[String])]()
@@ -147,7 +141,7 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
   }
 
   it should "not try to extract redirect targets if the target is invalid" in {
-    val queue = new CrawlingQueue(Seq(MalformedRedirectBase))
+    val queue = BoundedCrawlQueue(Seq(MalformedRedirectBase).iterator)
     val core = CrawlCore(queue, conf)
     val expected = Seq((MalformedRedirectBase, Some(MalformedRedirectDepth1)))
     val actual = new CopyOnWriteArrayList[(String, Option[String])]()

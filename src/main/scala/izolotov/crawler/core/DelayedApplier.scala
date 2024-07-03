@@ -1,4 +1,4 @@
-package izolotov
+package izolotov.crawler.core
 
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -24,6 +24,7 @@ class DelayedApplier() {
   }
 
   def apply[A, B](arg: A, fn: A => B, delayMillis: Long): B = {
+    if (delayMillis < 0) throw new IllegalArgumentException("Delay must be non-negative")
     callerLock.lock()
     try {
       delayLock.lock()

@@ -1,4 +1,4 @@
-package izolotov.crawler
+package izolotov.crawler.core
 
 import scala.util.Try
 

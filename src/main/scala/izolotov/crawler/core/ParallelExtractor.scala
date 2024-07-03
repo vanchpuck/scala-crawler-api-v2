@@ -1,9 +1,9 @@
 package izolotov.crawler
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import izolotov.DelayedApplier
 import izolotov.crawler.ParallelExtractor._
-import izolotov.crawler.SuperNewCrawlerApi.Configuration
+import izolotov.crawler.core.Api.Configuration
+import izolotov.crawler.core.{Attempt, DelayedApplier}
 
 import java.net.{URI, URL}
 import java.util.concurrent._
@@ -20,15 +20,15 @@ object ParallelExtractor {
   class TimeoutException(message: String) extends Exception(message: String)
 
   class NotAllowedException(message: String) extends Exception(message)
-  class NotAllowedByRobotsTxtException(url: URL) extends NotAllowedException(s"The ${url.toString} is not allowed by robots.txt policy")
+  class NotAllowedByRobotsTxtException(url: URL) extends NotAllowedException(s"${url.toString} is not allowed by robots.txt policy")
 
-  class NotAllowedByUserException(url: URL) extends NotAllowedException(s"The ${url.toString} is not allowed by user policy")
+  class NotAllowedByUserException(url: URL) extends NotAllowedException(s"${url.toString} is not allowed by user policy")
 
-  class NotParsedException[Raw](val url: URL, val raw: Raw) extends Exception("DF")
+  class NotParsedException[Raw](val url: URL, val raw: Raw, val message: String) extends Exception(message)
 
-  class RedirectException[Raw](url: URL, raw: Raw, val target: String) extends NotParsedException(url, raw)
+  class RedirectException[Raw](url: URL, raw: Raw, val target: String) extends NotParsedException(url, raw, s"${url.toString} has been redirected to $target")
 
-  class ParsingException[Raw](url: URL, raw: Raw, val cause: Throwable) extends NotParsedException[Raw](url, raw)
+  class ParsingException[Raw](url: URL, raw: Raw, val cause: Throwable) extends NotParsedException[Raw](url, raw, s"${url.toString} parsing exception $cause")
 
   class FetchingException(cause: Throwable) extends Exception(cause)
 
@@ -82,12 +82,14 @@ object ParallelExtractor {
 
 class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
 
+  if (conf.queueLength < 1) throw new IllegalArgumentException("Queue length must be grater then 0")
+
   class AttemptStarter(fnGetTimeout: URL => Long) extends AutoCloseable {
     private implicit val ec: ExecutionContextExecutorService = ExecutionContext.fromExecutorService(Executors.newThreadPerTaskExecutor(DaemonThreadFactory))
     def start(url: URL): Attempt[Doc] = {
       val timeout = fnGetTimeout(url)
       val future = Future {
-        val raw = Try(conf.fetcher(url)).recover { case e if true => throw new FetchingException(e) }
+        val raw = Try(conf.fetcher(url)(url, conf.httpHeaders(url))).recover { case e if true => throw new FetchingException(e) }
         val redirectTarget: Option[String] = raw.toOption.flatMap(conf.redirect)
         val doc = redirectTarget
           .map(target => Failure(new RedirectException(url, raw.get, target)))
@@ -106,6 +108,13 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
     override def close(): Unit = ParallelExtractor.shutdown(ec)
   }
 
+  // TODO rename!!!
+  object St extends RobotRules {
+    override def delay(): Option[Long] = RobotRules.Empty.delay()
+
+    override def allowance(url: URL): Boolean = RobotRules.Empty.allowance(url)
+  }
+
   private val ec = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
     conf.parallelism,
     conf.parallelism,
@@ -115,6 +124,7 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
     DaemonThreadFactory,
     (r: Runnable, e: ThreadPoolExecutor) => {
       lock.lock()
+      println("$$$$$")
       Try(condition.await())
       lock.unlock()
       e.execute(r)
@@ -128,13 +138,13 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
   private val condition: Condition = lock.newCondition()
 
   private def extractRobotRules(url: URL, queue: Queue): RobotRules = {
-    Try(Await.result(queue.extract(getRobotsTxtURL(url), conf.fetcher.andThen(conf.robotsHandler))(ec), Duration.Inf))
-      // TODO replace println with logging
-      .recover {
-        case exc if true => print(exc);
-          RobotRules.empty()
-      }
-      .get
+    val robotsTxtUrl = getRobotsTxtURL(url)
+    Try(Await.result(
+      queue.extract(
+        robotsTxtUrl,
+        conf.fetcher.andThen(a => a(robotsTxtUrl, conf.httpHeaders(robotsTxtUrl))).andThen(conf.robotsHandler)
+      )(ec), Duration.Inf
+    )).recover { case exc if true => print(exc); RobotRules.Empty }.get // TODO replace println with logging
   }
 
   def extract(url: String): Future[Attempt[Doc]] = {
@@ -147,7 +157,7 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
         hostMap.get(_url.getHost).map { value =>
           val (queue, rules) = value
           rules match {
-            case RobotRules.Stub =>
+            case St =>
               if (conf.robotsTxtPolicy(_url)) {
                 val actualRules = extractRobotRules(_url, queue)
                 hostMap(_url.getHost) = (queue, actualRules)
@@ -161,7 +171,7 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
           val rules = if (conf.robotsTxtPolicy(_url)) {
             extractRobotRules(_url, queue)
           } else {
-            RobotRules.Stub
+            St
           }
           hostMap(_url.getHost) = (queue, rules)
           (_url, queue, rules)
