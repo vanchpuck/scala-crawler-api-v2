@@ -3,7 +3,7 @@ package izolotov.crawler.core
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 
-class DelayedApplier() {
+class DelayedApplier {
 
   private var prevCallEndTime: Long = 0
   private val delayLock = new ReentrantLock()

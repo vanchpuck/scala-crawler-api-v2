@@ -1,8 +1,5 @@
-package izolotov.crawler
+package izolotov.crawler.core
 
-import izolotov.CrawlQueue
-import izolotov.crawler.core.Attempt
-//import izolotov.CrawlingQueueIterator
 import izolotov.crawler.core.Api.Configuration
 
 import java.net.URI
@@ -17,27 +14,31 @@ object CrawlCore {
 class CrawlCore[Raw, Doc](queue: CrawlQueue, conf: Configuration[Raw, Doc]) {
   def foreach[Out](fn: Attempt[Doc] => Out)(implicit executionContext: ExecutionContext): Unit = {
     val extractor = new ParallelExtractor[Raw, Doc](conf)
-    val futures = queue
-      .map { item =>
-        val future = extractor.extract(item.url).map { res =>
-          val targetRedirect = res.redirectTarget.map { target =>
-            Try(URI.create(target).toURL).foreach { t =>
-              if (item.depth < conf.redirectPolicy(new URI(item.baseUrl).toURL)(t))
-                queue.add(target, item.url, item.depth + 1)
+    try {
+      val futures = queue
+        .map { item =>
+          val future = extractor.extract(item.url).map { res =>
+            val targetRedirect = res.redirectTarget.map { target =>
+              Try(URI.create(target).toURL).foreach { t =>
+                if (item.depth < conf.redirectPolicy(new URI(item.baseUrl).toURL)(t))
+                  queue.add(target, item.url, item.depth + 1)
+              }
+              target
             }
-            target
+            Attempt(res.url, res.doc, targetRedirect, Seq.empty)
           }
-          Attempt(res.url, res.doc, targetRedirect, Seq.empty)
+          future.onComplete {
+            case Success(attempt) =>
+              try
+                fn(attempt)
+              finally
+                item.close()
+          }
+          future
         }
-        future.onComplete {
-          case Success(attempt) =>
-            try
-              fn(attempt)
-            finally
-              item.close()
-        }
-        future
-      }
-    Await.result(Future.sequence(futures), Duration.Inf)
+      Await.result(Future.sequence(futures), Duration.Inf)
+    } finally {
+      extractor.shutdown()
+    }
   }
 }

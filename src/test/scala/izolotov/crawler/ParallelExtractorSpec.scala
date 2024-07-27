@@ -1,9 +1,9 @@
 package izolotov.crawler
 
-import izolotov.crawler.ParallelExtractor._
 import izolotov.crawler.ParallelExtractorSpec._
 import izolotov.crawler.core.Api.{Configuration, ConfigurationBuilder}
-import izolotov.crawler.core.{Attempt, HttpHeader}
+import izolotov.crawler.core.ParallelExtractor.{NotAllowedByRobotsTxtException, NotAllowedByUserException, ParsingException, RedirectException}
+import izolotov.crawler.core.{Attempt, HttpHeader, ParallelExtractor, RobotRules}
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 
@@ -140,7 +140,7 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
     server = new ServerMock(DefaultProcessingTime)
     val builder = new ConfigurationBuilder[Raw, Raw](
       parallelism = 1,
-      redirect = raw => raw.redirect,
+      redirectSpotter = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
       queueLength = DefaultProcessingQueueLength,
       allowancePolicy = url => !url.getFile.endsWith(DisallowByUser),
@@ -189,6 +189,13 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
   it should "try to extract robots.txt if it's enabled" in {
     await(new ParallelExtractor(conf).extract(Youtube))
     assert(server.requests.exists(req => req.url.toString == YoutubeRobots))
+  }
+
+  it should "try to extract robots.txt only once per host if it's enabled" in {
+    val extractor = new ParallelExtractor(conf)
+    await(extractor.extract(Youtube))
+    await(extractor.extract(Youtube))
+    assert(server.requests.count(req => req.url.toString == YoutubeRobots) == 1)
   }
 
   it should "follow the robots.txt rules if it's enabled" in {
@@ -274,7 +281,7 @@ class ParallelExtractorSpec extends AnyFlatSpec with BeforeAndAfterEach {
   it should "not support queueLength value that is less than 1" in {
     val conf = new ConfigurationBuilder[Raw, Raw](
       parallelism = 1,
-      redirect = raw => raw.redirect,
+      redirectSpotter = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
       queueLength = 0,
       fetcher = server.call,

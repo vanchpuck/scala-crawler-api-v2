@@ -1,9 +1,8 @@
-package izolotov.crawler
+package izolotov.crawler.core
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import izolotov.crawler.ParallelExtractor._
+import izolotov.crawler.core.ParallelExtractor._
 import izolotov.crawler.core.Api.Configuration
-import izolotov.crawler.core.{Attempt, DelayedApplier}
 
 import java.net.{URI, URL}
 import java.util.concurrent._
@@ -36,7 +35,7 @@ object ParallelExtractor {
     def apply(): Queue = new Queue()
   }
 
-  class Queue() {
+  class Queue {
 
     private val localEC = ExecutionContext.fromExecutorService(Executors.newSingleThreadExecutor(DaemonThreadFactory))
 
@@ -64,7 +63,7 @@ object ParallelExtractor {
   }
 
   private def shutdown(executor: ExecutionContextExecutorService): Unit = {
-    executor.shutdown
+    executor.shutdown()
     try
       if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
         executor.shutdownNow
@@ -77,7 +76,7 @@ object ParallelExtractor {
     }
   }
 
-  private def getRobotsTxtURL: URL => URL = url => URI.create(s"${url.getProtocol}://${url.getHost}/robots.txt").toURL
+  private def getRobotsTxtURL: URL => URL = url => URI.create(s"${url.getProtocol}://${url.getHost}${if (url.getPort != -1) s":${url.getPort}" else ""}/robots.txt").toURL
 }
 
 class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
@@ -124,7 +123,6 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
     DaemonThreadFactory,
     (r: Runnable, e: ThreadPoolExecutor) => {
       lock.lock()
-      println("$$$$$")
       Try(condition.await())
       lock.unlock()
       e.execute(r)
@@ -143,15 +141,13 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
       queue.extract(
         robotsTxtUrl,
         conf.fetcher.andThen(a => a(robotsTxtUrl, conf.httpHeaders(robotsTxtUrl))).andThen(conf.robotsHandler)
-      )(ec), Duration.Inf
+      )(ec),
+      Duration.Inf
     )).recover { case exc if true => print(exc); RobotRules.Empty }.get // TODO replace println with logging
   }
 
   def extract(url: String): Future[Attempt[Doc]] = {
-    println("Extracting")
-    // TODO Improvement. We have to call robots.txt even if it's ignored in config.
     val spec = Try(URI.create(url).toURL)
-      // TODO unit test for the exception
       .map { _url => if (!conf.allowancePolicy(_url)) throw new NotAllowedByUserException(_url); _url }
       .map { _url =>
         hostMap.get(_url.getHost).map { value =>

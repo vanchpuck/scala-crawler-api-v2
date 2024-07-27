@@ -3,7 +3,6 @@ package izolotov.crawler.core
 import com.google.common.collect.Lists
 import com.google.common.net.HttpHeaders
 import crawlercommons.robots.{BaseRobotRules, SimpleRobotRules, SimpleRobotRulesParser}
-import izolotov.crawler.RobotRules
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
@@ -59,14 +58,14 @@ object DefaultCrawler {
         resp.body().wholeText().getBytes,
         resp.headers().firstValue("Content-Type").orElse("text/plain"),
         // TODO robotName vs userAgent
-        Lists.newArrayList(resp.request().headers().firstValue("User-Agent").orElse(""))
+        Lists.newArrayList(resp.request().headers().firstValue("User-Agent").orElse("").toLowerCase)
       )
       new DefaultRobotRules(rules)
   }
 
   def httpFetcher[T](
                       httpClient: HttpClient = DefaultHttpClient
-                    )(implicit bodyHandler: HttpResponse.BodyHandler[T]): (URL, Seq[HttpHeader]) => HttpResponse[T] = {
+                    )(implicit bodyHandler: HttpResponse.BodyHandler[T]): (URL, Iterable[HttpHeader]) => HttpResponse[T] = {
     if (httpClient.followRedirects() != HttpClient.Redirect.NEVER)
       throw new IllegalStateException("Only the NEVER redirect policy allowed")
     (url, headers) =>
@@ -76,5 +75,4 @@ object DefaultCrawler {
       headers.foreach(header => builder.setHeader(header.name(), Option(header.value()).getOrElse("")))
       httpClient.send(builder.build(), bodyHandler)
   }
-
 }

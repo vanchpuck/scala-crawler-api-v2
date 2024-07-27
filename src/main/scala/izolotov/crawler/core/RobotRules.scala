@@ -1,4 +1,4 @@
-package izolotov.crawler
+package izolotov.crawler.core
 
 import java.net.URL
 
@@ -16,7 +16,6 @@ object RobotRules {
 
     override def allowance(url: URL): Boolean = true
   }
-
 }
 
 trait RobotRules {

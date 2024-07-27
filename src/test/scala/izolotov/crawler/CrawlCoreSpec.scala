@@ -1,10 +1,9 @@
 package izolotov.crawler
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import izolotov.BoundedCrawlQueue
 import izolotov.crawler.CrawlCoreSpec._
 import izolotov.crawler.core.Api.{Configuration, ConfigurationBuilder}
-import izolotov.crawler.core.{Attempt, HttpHeader}
+import izolotov.crawler.core.{Attempt, BoundedCrawlQueue, CrawlCore, HttpHeader, RobotRules}
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 
@@ -90,7 +89,7 @@ class CrawlCoreSpec extends AnyFlatSpec with BeforeAndAfterEach {
     server = new ServerMock()
     val builder = new ConfigurationBuilder[Raw, Raw](
       parallelism = 2,
-      redirect = raw => raw.redirect,
+      redirectSpotter = raw => raw.redirect,
       robotsHandler = _ => DummyRobotRules,
       queueLength = 3,
       allowancePolicy = url => !url.toString.contains("disallowed"),

@@ -17,12 +17,8 @@ libraryDependencies += "org.apache.httpcomponents.core5" % "httpcore5" % "5.2.4"
 
 // https://mvnrepository.com/artifact/org.scalatest/scalatest
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.18" % Test
-// https://mvnrepository.com/artifact/org.eclipse.jetty/jetty-server
-libraryDependencies += "org.eclipse.jetty" % "jetty-server" % "12.0.8" % Test
-// https://mvnrepository.com/artifact/org.eclipse.jetty/jetty-util
-libraryDependencies += "org.eclipse.jetty" % "jetty-util" % "12.0.8" % Test
-// https://mvnrepository.com/artifact/org.eclipse.jetty/jetty-server
-libraryDependencies += "org.eclipse.jetty" % "jetty-server" % "12.0.8" % Test
+// https://mvnrepository.com/artifact/io.undertow/undertow-core
+libraryDependencies += "io.undertow" % "undertow-core" % "2.3.14.Final" % Test
 // https://mvnrepository.com/artifact/org.json4s/json4s-native
 libraryDependencies += "org.json4s" %% "json4s-native" % "4.1.0-M5" % Test
 

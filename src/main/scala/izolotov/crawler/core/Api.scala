@@ -1,14 +1,90 @@
 package izolotov.crawler.core
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import izolotov.crawler.{CrawlCore, RobotRules}
-import izolotov.CrawlQueue
 
 import java.net.URL
 import java.util.concurrent.Executors
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutorService}
 
 object Api {
+
+  object Util {
+    val DefaultDepth: Int = 5
+
+    def all(): URL => Boolean = _ => true
+
+    def host(host: String): URL => Boolean = url => url.getHost.toLowerCase == host.toLowerCase
+
+    def url(url: String): URL => Boolean = _url => _url.toString.toLowerCase == url.toLowerCase
+
+    def modify(headers: izolotov.crawler.core.HttpHeader*): Iterable[izolotov.crawler.core.HttpHeader] => Iterable[izolotov.crawler.core.HttpHeader] = {
+      baseHeaders => {
+        val baseHeadersMap = baseHeaders.groupBy(h => h.name()).map(entry => (entry._1, entry._2.head))
+        val headersToModifyMap = headers.groupBy(h => h.name()).map(entry => (entry._1, entry._2.head))
+        val joinedMap = baseHeadersMap ++ headersToModifyMap
+        joinedMap.values
+      }
+    }
+
+    def overwrite(headers: izolotov.crawler.core.HttpHeader*): Iterable[izolotov.crawler.core.HttpHeader] => Iterable[izolotov.crawler.core.HttpHeader] = _ => headers
+
+    def allow: URLAllowancePolicy.type = URLAllowancePolicy
+
+    def disallow: URLDisallowancePolicy.type = URLDisallowancePolicy
+
+    def follow: RedirectTrackingPolicy.type = RedirectTrackingPolicy
+
+    def prevent: RedirectPreventingPolicy.type = RedirectPreventingPolicy
+
+    // TODO good to make it private
+    protected object URLAllowancePolicy {
+      def all(): URL => Boolean = _ => true
+
+      def host(host: String): URL => Boolean = url => url.getHost.toLowerCase == host.toLowerCase
+
+      def url(url: String): URL => Boolean = _url => _url.toString.toLowerCase == url.toLowerCase
+    }
+
+    protected object URLDisallowancePolicy {
+      def all(): URL => Boolean = _ => false
+
+      def host(host: String): URL => Boolean = url => url.getHost.toLowerCase != host.toLowerCase
+
+      def url(url: String): URL => Boolean = _url => _url.toString.toLowerCase != url.toLowerCase
+    }
+
+    protected object RedirectTrackingPolicy {
+
+      def all(depth: Int = DefaultDepth): URL => Int = {
+        require(depth >= 0)
+        _ => depth
+      }
+
+      def host(host: String, depth: Int = DefaultDepth): URL => Int = {
+        require(depth >= 0)
+        _url => if (_url.getHost.toLowerCase == host.toLowerCase) depth else 0
+      }
+
+      def url(url: String, depth: Int = DefaultDepth): URL => Int = {
+        require(depth >= 0)
+        _url => if (_url.toString.toLowerCase == url.toLowerCase) depth else 0
+      }
+    }
+
+    protected object RedirectPreventingPolicy {
+      def all(): URL => Int = _ => 0
+
+      def host(host: String, depth: Int = DefaultDepth): URL => Int = {
+        require(depth >= 0)
+        _url => if (_url.getHost.toLowerCase != host.toLowerCase) depth else 0
+      }
+
+      def url(url: String, depth: Int = DefaultDepth): URL => Int = {
+        require(depth >= 0)
+        _url => if (_url.toString.toLowerCase != url.toLowerCase) depth else 0
+      }
+    }
+  }
 
   private val DaemonThreadFactory = new ThreadFactoryBuilder().setDaemon(true).build
 
@@ -18,54 +94,53 @@ object Api {
   val RespectRobotsTxtPolicy: Boolean = true
   val AllowAllPolicy: URL => Boolean = _ => true
 
-  case class Configuration[Raw, Doc] (
+  private[crawler] case class Configuration[Raw, Doc] (
                                        parallelism: Int,
                                        redirect: Raw => Option[String],
                                        robotsHandler: Raw => RobotRules,
                                        queueLength: Int,
                                        allowancePolicy: URL => Boolean,
 //                                       fetcher: (URL, Seq[HttpHeader]) => Raw,
-                                       fetcher: URL => (URL, Seq[HttpHeader]) => Raw,
+                                       fetcher: URL => (URL, Iterable[HttpHeader]) => Raw,
                                        parser: URL => Raw => Doc,
                                        delay: URL => Long,
                                        timeout: URL => Long,
                                        redirectPolicy: URL => URL => Int,
                                        robotsTxtPolicy: URL => Boolean,
-                                       httpHeaders: URL => Seq[HttpHeader]
+                                       httpHeaders: URL => Iterable[HttpHeader]
                                      )
 
-  // TODO refactor to class (not a case class)
-  class ConfigurationBuilder[Raw, Doc](
-                                        val parallelism: Int,
-                                        // TODO rename to redirectExtractor or something like that
-                                        val redirect: Raw => Option[String],
-                                        val robotsHandler: Raw => RobotRules,
-                                        val fetcher: (URL, Seq[HttpHeader]) => Raw,
-                                        val parser: Raw => Doc,
-                                        val allowancePolicy: URL => Boolean = AllowAllPolicy,
-                                        val queueLength: Int = Int.MaxValue,
-                                        val delay: Long = DefaultDelay,
-                                        val timeout: Long = DefaultTimeout,
-                                        val redirectPolicy: URL => Int = PreventRedirectPolicy,
-                                        val robotsTxtPolicy: Boolean = RespectRobotsTxtPolicy,
-                                        val httpHeaders: Seq[HttpHeader] = Seq.empty
-                                      ) {
-//    private var getFetcher: PartialFunction[(URL, Seq[HttpHeader]), Raw] = {case args if true => this.fetcher(args._1, httpHeaders)}
-    private var getFetcher: PartialFunction[URL, (URL, Seq[HttpHeader]) => Raw] = {case _ if true => this.fetcher}
-//    private var getFetcher: PartialFunction[URL, Raw] = {case url if true => this.fetcher(url, httpHeaders)}
+  private[crawler] object ConfigurationBuilder {
+    val PassHeaders: Iterable[HttpHeader] => Iterable[HttpHeader] = headers => headers
+  }
+
+  private[crawler] class ConfigurationBuilder[Raw, Doc](
+                                                         val parallelism: Int,
+                                                         // TODO rename to redirectExtractor or something like that
+                                                         val redirectSpotter: Raw => Option[String],
+                                                         val robotsHandler: Raw => RobotRules,
+                                                         val fetcher: (URL, Iterable[HttpHeader]) => Raw,
+                                                         val parser: Raw => Doc,
+                                                         val allowancePolicy: URL => Boolean = AllowAllPolicy,
+                                                         val queueLength: Int = Int.MaxValue,
+                                                         val delay: Long = DefaultDelay,
+                                                         val timeout: Long = DefaultTimeout,
+                                                         val redirectPolicy: URL => Int = PreventRedirectPolicy,
+                                                         val robotsTxtPolicy: Boolean = RespectRobotsTxtPolicy,
+                                                         val headers: Iterable[HttpHeader] = Seq.empty
+                                                       ) {
+    private var getFetcher: PartialFunction[URL, (URL, Iterable[HttpHeader]) => Raw] = {case _ if true => this.fetcher}
     private var getParser: PartialFunction[URL, Raw => Doc] = {case _ if true => this.parser}
     private var getDelay: PartialFunction[URL, Long] = {case _ if true => this.delay}
     private var getTimeout: PartialFunction[URL, Long] = {case _ if true => this.timeout}
     private var getRedirectPolicy: PartialFunction[URL, URL => Int] = {case _ if true => this.redirectPolicy}
-//    private var getRobotsTxtPolicy: PartialFunction[URL, URL => Int] = {case _ if true => this.robotsTxtPolicy}
     private var getRespectRobotsTxt: PartialFunction[URL, Boolean] = {case _ if true => this.robotsTxtPolicy}
-    private var getHttpHeaders: PartialFunction[URL, Seq[HttpHeader]] = {case _ if true => this.httpHeaders}
-    //    private var getAllowancePolicy: PartialFunction[URL, URL => Boolean] = {case _ if true => this.allowancePolicy}
+    private var getHeaders: PartialFunction[URL, Iterable[HttpHeader]] = {case _ if true => this.headers}
 
     def build(): Configuration[Raw, Doc] = {
       Configuration[Raw, Doc] (
         parallelism,
-        redirect,
+        redirectSpotter,
         robotsHandler,
         queueLength,
         allowancePolicy,
@@ -75,33 +150,31 @@ object Api {
         getTimeout,
         getRedirectPolicy,
         getRespectRobotsTxt,
-        getHttpHeaders
+        getHeaders
       )
     }
 
     def addConf (
                   predicate: URL => Boolean,
-                  fetcher: (URL, Seq[HttpHeader]) => Raw = this.fetcher,
+                  fetcher: (URL, Iterable[HttpHeader]) => Raw = this.fetcher,
                   parser: Raw => Doc = this.parser,
                   delay: Long = this.delay,
                   timeout: Long = this.timeout,
                   redirectPolicy: URL => Int = this.redirectPolicy,
                   robotsTxtPolicy: Boolean = this.robotsTxtPolicy,
-                  httpHeaders: Seq[HttpHeader] = this.httpHeaders,
+                  headers: Iterable[HttpHeader] => Iterable[HttpHeader] = ConfigurationBuilder.PassHeaders,
                 ): ConfigurationBuilder[Raw, Doc] = {
       // FIXME
       val fnRedirectPolicy: PartialFunction[URL, URL => Int] = {case url if predicate(url) => redirectPolicy}
-      //      val fnRobotsTxtPolicy: PartialFunction[URL, Boolean] = {case url if predicate(url) => robotsTxtPolicy(url)}
-//      val fnFetcher: PartialFunction[URL, Raw] = {case url if predicate(url) => fetcher(url)}
-      val fnFetcher: PartialFunction[URL, (URL, Seq[HttpHeader]) => Raw] = {case url if predicate(url) => fetcher}
+      val fnFetcher: PartialFunction[URL, (URL, Iterable[HttpHeader]) => Raw] = {case url if predicate(url) => fetcher}
       if (fetcher != this.fetcher) getFetcher = fnFetcher.orElse(getFetcher)
       if (parser != this.parser) getParser = toPF(predicate, parser).orElse(getParser)
       if (delay != this.delay) getDelay = toPF(predicate, delay).orElse(getDelay)
       if (robotsTxtPolicy != this.robotsTxtPolicy) getRespectRobotsTxt = toPF(predicate, robotsTxtPolicy).orElse(getRespectRobotsTxt)
-      //      if (allowancePolicy != this.allowancePolicy) getAllowancePolicy = toPF(predicate, allowancePolicy).orElse(getAllowancePolicy)
       if (timeout != this.timeout) getTimeout = toPF(predicate, timeout).orElse(getTimeout)
       if (redirectPolicy != this.redirectPolicy) getRedirectPolicy =
         fnRedirectPolicy.orElse(getRedirectPolicy)
+      if (headers != ConfigurationBuilder.PassHeaders) getHeaders = toPF(predicate, headers(this.headers)).orElse(getHeaders)
       this
     }
 
@@ -119,9 +192,9 @@ object Api {
     }
   }
 
-  class ExtractionBuilder(urls: CrawlQueue) {
+  private[crawler] class ExtractionBuilder(urls: CrawlQueue) {
     def extract[Raw, Doc](
-                           fetcher: (URL, Seq[HttpHeader]) => Raw,
+                           fetcher: (URL, Iterable[HttpHeader]) => Raw,
                            parser: Raw => Doc,
                            parallelism: Int = 10,
                            queueLength: Int = Int.MaxValue,
@@ -143,7 +216,8 @@ object Api {
         delay,
         timeout,
         redirectPolicy,
-        respectRobotsTxt
+        respectRobotsTxt,
+        headers
       )
       new BranchPredicateBuilder[Raw, Doc](
         urls, confBuilder
@@ -151,16 +225,16 @@ object Api {
     }
   }
 
-  class BranchPredicateBuilder[Raw, Doc](
-                                          urls: CrawlQueue,
-                                          builder: ConfigurationBuilder[Raw, Doc]
-                                        ) {
+  private[crawler] class BranchPredicateBuilder[Raw, Doc](
+                                                           urls: CrawlQueue,
+                                                           builder: ConfigurationBuilder[Raw, Doc]
+                                                         ) {
     implicit val ec: ExecutionContextExecutorService = ExecutionContext.fromExecutorService(
       Executors.newSingleThreadExecutor(DaemonThreadFactory)
     )
 
     def foreach[Err](onSuccess: Doc => Unit, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
-      foreachRaw(res => res.doc)(doc => doc.map(onSuccess).recover{case e if true => onErr(e)})
+      foreachRaw(res => res.doc)(doc => doc.map(onSuccess).recover { case e if true => onErr(e) })
     }
 
     def foreach(fn: Attempt[Doc] => Unit): Unit = {
@@ -177,17 +251,17 @@ object Api {
     }
   }
 
-  class BranchConfigurationBuilder[Raw, Doc](urls: CrawlQueue, conf: ConfigurationBuilder[Raw, Doc], predicate: URL => Boolean) {
+  private[crawler] class BranchConfigurationBuilder[Raw, Doc](urls: CrawlQueue, conf: ConfigurationBuilder[Raw, Doc], predicate: URL => Boolean) {
     def set(
-             fetcher: (URL, Seq[HttpHeader]) => Raw = conf.fetcher,
+             fetcher: (URL, Iterable[HttpHeader]) => Raw = conf.fetcher,
              parser: Raw => Doc = conf.parser,
              delay: Long = conf.delay,
              timeout: Long = conf.timeout,
              redirectPolicy: URL => Int = conf.redirectPolicy,
              respectRobotsTxt: Boolean = conf.robotsTxtPolicy,
-             httpHeaders: Seq[HttpHeader] = conf.httpHeaders
+             headers: Iterable[HttpHeader] => Iterable[HttpHeader] = ConfigurationBuilder.PassHeaders
            ): BranchPredicateBuilder[Raw, Doc] = {
-      conf.addConf(predicate, fetcher, parser, delay, timeout, redirectPolicy, respectRobotsTxt)
+      conf.addConf(predicate, fetcher, parser, delay, timeout, redirectPolicy, respectRobotsTxt, headers)
       new BranchPredicateBuilder[Raw, Doc](urls, conf)
     }
   }

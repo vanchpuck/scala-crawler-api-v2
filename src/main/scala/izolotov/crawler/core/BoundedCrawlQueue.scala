@@ -1,4 +1,4 @@
-package izolotov
+package izolotov.crawler.core
 
 import BoundedCrawlQueue._
 

@@ -1,4 +1,4 @@
-package izolotov
+package izolotov.crawler.core
 
 object CrawlQueue {
   trait Item extends AutoCloseable{

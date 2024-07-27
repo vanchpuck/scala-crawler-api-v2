@@ -1,11 +1,11 @@
 package izolotov.crawler
 
-import izolotov.BoundedCrawlQueue
 import org.scalatest.flatspec.AnyFlatSpec
 
 import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutor, Future}
 import scala.concurrent.duration.Duration
 import BoundedCrawlQueueSpec._
+import izolotov.crawler.core.BoundedCrawlQueue
 
 import scala.util.Using
 
