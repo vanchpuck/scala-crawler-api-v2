@@ -22,3 +22,5 @@ trait RobotRules {
   def delay(): Option[Long]
   def allowance(url: URL): Boolean
 }
+
+case class TheRobotRules(delay: Option[Long], allowance: URL => Boolean)

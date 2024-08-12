@@ -30,34 +30,6 @@ object EndToEndSpec {
   val Host2Redirect = s"http://$Host2:$Port/redirect"
   val Host1RedirectTarget = s"http://$Host1:$Port/target"
 
-//  class PayloadHandler(payload: String) extends HttpHandler {
-//    override def handleRequest(exchange: HttpServerExchange): Unit = {
-//      exchange.getResponseHeaders.put(Headers.CONTENT_TYPE, "text/plain;charset=utf-8")
-//      exchange.setStatusCode(StatusCodes.OK)
-//      exchange.getResponseSender.send(payload);
-//    }
-//  }
-
-//  class RedirectHandler(target: String) extends HttpHandler {
-//    override def handleRequest(exchange: HttpServerExchange): Unit = {
-//      exchange.getResponseHeaders.put(Headers.LOCATION, target)
-//      exchange.setStatusCode(StatusCodes.PERMANENT_REDIRECT)
-//    }
-//  }
-
-//  object OkHandler {
-//    val Payload = "Ok"
-//  }
-
-//  class OkHandler(processingTime: Long = 0L) extends HttpHandler {
-//    override def handleRequest(exchange: HttpServerExchange): Unit = {
-//      Thread.sleep(processingTime)
-//      exchange.getResponseHeaders.put(Headers.CONTENT_TYPE, "text/plain;charset=utf-8")
-//      exchange.setStatusCode(StatusCodes.OK)
-//      exchange.getResponseSender.send(OkHandler.Payload);
-//    }
-//  }
-
   private val OkPayload = "Ok"
   private val RobotsTxtPayload =
     """
@@ -65,21 +37,6 @@ object EndToEndSpec {
       |User-agent: *
       |Disallow: /private/
       |""".stripMargin
-
-//  object RobotsTxtHandler extends HttpHandler {
-//    val Payload: String =
-//      """
-//        |Crawl-delay: 2
-//        |User-agent: *
-//        |Disallow: /private/
-//        |""".stripMargin
-//
-//    override def handleRequest(exchange: HttpServerExchange): Unit = {
-//      exchange.getResponseHeaders.put(Headers.CONTENT_TYPE, "text/plain;charset=utf-8")
-//      exchange.setStatusCode(StatusCodes.OK)
-//      exchange.getResponseSender.send(Payload);
-//    }
-//  }
 }
 
 class EndToEndSpec extends AnyFlatSpec with BeforeAndAfterAll {
@@ -106,17 +63,8 @@ class EndToEndSpec extends AnyFlatSpec with BeforeAndAfterAll {
   override def afterAll(): Unit = {
     server.stop()
   }
-//
-//  //  def owerwrite(header: HttpHeader*): Iterable[HttpHeader] => Iterable[HttpHeader] = _ => header
-//  def modify(headers: izolotov.crawler.core.HttpHeader*): Iterable[izolotov.crawler.core.HttpHeader] => Iterable[izolotov.crawler.core.HttpHeader] = {
-//    val headersMap = headers.groupBy(h => h.name()).map(entry => (entry._1, entry._2.head))
-//    defaultHeaders => defaultHeaders.map { h =>
-//      headersMap.getOrElse(h.name(), h)
-//    }
-//  }
 
   it should "work end-to-end" in {
-    // TODO check case user agent sensitivity
     val out: mutable.Map[String, Try[HttpResponse[Document]]] = mutable.Map()
     val addToOut: Attempt[HttpResponse[Document]] => Unit = att => out(att.url) = att.doc
     val urls = Seq(

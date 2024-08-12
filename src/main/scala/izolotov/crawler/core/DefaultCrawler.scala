@@ -54,9 +54,9 @@ object DefaultCrawler {
   implicit val robotsPolicySpotter: HttpResponse[Document] => RobotRules = {
     resp =>
       val rules = new SimpleRobotRulesParser().parseContent(
-        resp.uri().toString,
+        resp.uri().toURL.toString,
         resp.body().wholeText().getBytes,
-        resp.headers().firstValue("Content-Type").orElse("text/plain"),
+        resp.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElse("text/plain"),
         // TODO robotName vs userAgent
         Lists.newArrayList(resp.request().headers().firstValue("User-Agent").orElse("").toLowerCase)
       )

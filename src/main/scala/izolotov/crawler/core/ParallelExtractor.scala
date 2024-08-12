@@ -97,9 +97,11 @@ class ParallelExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
       }
       Try(Await.result(future, Duration.apply(timeout, TimeUnit.MILLISECONDS)))
         .recover {
-          case _ =>
+          case _: concurrent.TimeoutException  =>
             val timeoutExc = new ParallelExtractor.TimeoutException(s"URL ${url.toString} could not be extracted within $timeout milliseconds timeout")
             Attempt[Doc](url.toString, Failure(timeoutExc), None, Seq.empty)
+          case e: Throwable =>
+            Attempt[Doc](url.toString, Failure(e), None, Seq.empty)
         }
         .get
     }

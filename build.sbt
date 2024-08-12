@@ -10,10 +10,10 @@ libraryDependencies += "com.google.guava" % "guava" % "33.2.0-jre"
 libraryDependencies += "org.jsoup" % "jsoup" % "1.17.2"
 // https://mvnrepository.com/artifact/com.github.crawler-commons/crawler-commons
 libraryDependencies += "com.github.crawler-commons" % "crawler-commons" % "1.4"
-// https://mvnrepository.com/artifact/org.apache.httpcomponents.core5/httpcore5
-libraryDependencies += "org.apache.httpcomponents.core5" % "httpcore5" % "5.2.4"
-//// https://mvnrepository.com/artifact/net.sourceforge.htmlunit/htmlunit
-//libraryDependencies += "net.sourceforge.htmlunit" % "htmlunit" % "2.70.0"
+//// https://mvnrepository.com/artifact/org.apache.httpcomponents.core5/httpcore5
+//libraryDependencies += "org.apache.httpcomponents.core5" % "httpcore5" % "5.2.4"
+// https://mvnrepository.com/artifact/org.htmlunit/htmlunit
+libraryDependencies += "org.htmlunit" % "htmlunit" % "4.3.0"
 
 // https://mvnrepository.com/artifact/org.scalatest/scalatest
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.18" % Test
