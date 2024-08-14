@@ -2,14 +2,12 @@ package izolotov.htmlunit
 
 import com.google.common.net.HttpHeaders
 import crawlercommons.robots.{BaseRobotRules, SimpleRobotRules, SimpleRobotRulesParser}
-import izolotov.crawler.core.DefaultCrawler.DefaultRobotRules
-import izolotov.crawler.core.{HttpHeader, RobotRules, TheRobotRules}
-import org.htmlunit.{DefaultPageCreator, Page, TextPage, WebClient, WebRequest}
-//import org.htmlunit.html.HtmlPage
+import izolotov.crawler.robots.CommonRobotRules
+import izolotov.crawler.core.{HttpHeader, RobotRules}
+import org.htmlunit.{Page, TopLevelWindow, WebClient, WebRequest}
 
-import java.net.{URI, URL}
+import java.net.URL
 import java.nio.charset.{Charset, StandardCharsets}
-//import java.net.http.HttpRequest
 import scala.jdk.CollectionConverters._
 
 object HtmlUnitCrawler {
@@ -25,15 +23,18 @@ object HtmlUnitCrawler {
   def htmlUnitFetcher(webClient: WebClient = DefaultWebClient): (URL, Iterable[HttpHeader]) => Page = {
     if (webClient.getOptions.isRedirectEnabled)
       throw new IllegalStateException("Redirects should be disabled for WebClient")
+    if (webClient.getOptions.isThrowExceptionOnScriptError)
+      throw new IllegalStateException("Throwing exception on script error should be disabled WebClient")
+    if (webClient.getOptions.isThrowExceptionOnFailingStatusCode)
+      throw new IllegalStateException("Throwing exception on failing status code should be disabled WebClient")
     (url, headers) =>
       println(f"Fetch: $url")
+      val window = webClient.openWindow(null, url.toString)
+//      webClient.getTopLevelWindows
       val request = new WebRequest(url)
       headers.foreach(h => request.setAdditionalHeader(h.name(), h.value()))
-      val page: Page = webClient.getPage(request)
+      val page: Page = webClient.getPage(window, request)
       page
-//      val page: Page = webClient.getPage(request)
-//      DefaultPageCreator.determinePageType()
-//      page
   }
 
   implicit val redirectSpotter: Page => Option[String] = {
@@ -50,42 +51,27 @@ object HtmlUnitCrawler {
   }
 
   def doNothingParser(): Page => Page = {
-    val f: Page => Page = response => response
-    f
-  }
-
-  private class DefaultRobotRules(rules: SimpleRobotRules) extends RobotRules {
-    override def delay(): Option[Long] = {
-      if (rules.getCrawlDelay == BaseRobotRules.UNSET_CRAWL_DELAY) None else Some(rules.getCrawlDelay)
+    val f: Page => Page = { page =>
+      page.getEnclosingWindow.asInstanceOf[TopLevelWindow].close()
+      page
     }
-
-    override def allowance(url: URL): Boolean = rules.isAllowed(url.toString)
+    f
   }
 
   implicit val robotsPolicySpotter: Page => RobotRules = {
     page =>
-      val rules = new SimpleRobotRulesParser().parseContent(
-        page.getUrl.toString,
-        page.getWebResponse.getContentAsStream.readAllBytes(),
-        Option(page.getWebResponse.getResponseHeaderValue(HttpHeaders.CONTENT_TYPE)).getOrElse("text/plain"),
-        // TODO robotName vs userAgent
-        Option(page.getWebResponse.getWebRequest.getAdditionalHeader(HttpHeaders.USER_AGENT)).getOrElse("").toLowerCase
-      )
-      new DefaultRobotRules(rules)
-//      TheRobotRules(
-//        if (rules.getCrawlDelay == BaseRobotRules.UNSET_CRAWL_DELAY) None else Some(rules.getCrawlDelay),
-//        url => rules.isAllowed(url.toString)
-//      )
-//      override def delay(): Option[Long] = {
-//        if (rules.getCrawlDelay == BaseRobotRules.UNSET_CRAWL_DELAY) None else Some(rules.getCrawlDelay)
-//      }
-//      override def allowance(url: URL): Boolean = rules.isAllowed(url.toString)
+      try {
+        val rules = new SimpleRobotRulesParser().parseContent(
+          page.getUrl.toString,
+          page.getWebResponse.getContentAsStream.readAllBytes(),
+          Option(page.getWebResponse.getResponseHeaderValue(HttpHeaders.CONTENT_TYPE)).getOrElse("text/plain"),
+          // TODO robotName vs userAgent
+          Option(page.getWebResponse.getWebRequest.getAdditionalHeader(HttpHeaders.USER_AGENT)).getOrElse("").toLowerCase
+        )
+        new CommonRobotRules(rules)
+      } finally {
+        println("Closing !!!!!!!!!!!!!!!")
+        page.getEnclosingWindow.asInstanceOf[TopLevelWindow].close()
+      }
   }
-
-//  private def getDefaultWebClient: WebClient = {
-//    val client = new WebClient()
-//    client.getOptions.setRedirectEnabled(false)
-//    client
-//  }
-
 }
