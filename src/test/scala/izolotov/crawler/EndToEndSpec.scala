@@ -42,7 +42,7 @@ object EndToEndSpec {
 class EndToEndSpec extends AnyFlatSpec with BeforeAndAfterAll {
 
   import izolotov.crawler.util.CrawlQueueHelpers._
-  import izolotov.crawler.core.DefaultCrawler._
+  import izolotov.crawler.http.HttpCrawler._
 
   behavior of "Crawler"
 

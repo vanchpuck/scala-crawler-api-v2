@@ -2,7 +2,7 @@ package izolotov.crawler
 
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
-import izolotov.crawler.core.DefaultCrawler._
+import izolotov.crawler.http.HttpCrawler._
 import DefaultCrawlerSpec._
 import com.google.common.net.HttpHeaders
 import io.undertow.server.{HttpHandler, HttpServerExchange}
